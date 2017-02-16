@@ -127,7 +127,7 @@ getBeta(grSet)[1:3,1:3]
 densityPlot(getBeta(grSet), sampGroups = NULL, main = "", xlab = "Beta", add = TRUE, legend = TRUE)
 #ok, we're really close here... using both the above website and this one: https://www.bioconductor.org/help/workflows/methylationArrayAnalysis/#obtaining-the-data
 
-
+#here is a silly comment
 ```
 
 #Executive Summary
