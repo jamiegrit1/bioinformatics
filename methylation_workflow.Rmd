@@ -1,0 +1,237 @@
+---
+title: "Methylation Analysis Practice"
+author: "Jamie Grit"
+date: "January 19, 2017"
+output: 
+  html_document:
+    self_contained: yes
+    toc: yes
+---
+
+
+```{r config}
+#load packages required for analysis
+#(got list of packages from bioconductor example)
+library(limma)
+library(minfi)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+#annotation package for the DMR analysis... won't download
+#source("http://bioconductor.org/biocLite.R")
+#biocLite("IlluminaHumanMethylation450kanno.ilmn12.hg19")
+#got these from bioconductor... now seems to be working?
+library(IlluminaHumanMethylation450kmanifest)
+library(RColorBrewer)
+library(missMethyl)
+library(matrixStats)
+library(minfiData)
+library(Gviz)
+library(DMRcate)
+library(stringr)
+library(Biobase)
+library(GEOquery)
+
+```
+
+
+```{r data}
+#load geo data into R
+# used this website for help: https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE56596
+
+#Download GDS file, put it in the current directory, and load it:
+gse56596 <- getGEO('GSE56596', destdir=".")
+#the name of the file I downloaded is ./GSE56596_series_matrix_txt.gz
+#or ./GPL13534? 
+#this site has the file ftp://ftp.ncbi.nlm.nih.gov/geo/series/GSE56nnn/GSE56596/matrix/
+#according to GEO, the data I have downloaded is already normalized - if I want the raw data I will need to figure out how to download the raw data that are in the supplementary file 
+#according to the manuscript, they did background corection with bgAdjust method, color bias adjustment by the quantile method, normalization was done using simple scaling normalization. They used M-values instead of beta value
+
+#trying to figure out what my column names are to find the M-values (or hopefully beta-values) using this https://stat.ethz.ch/R-manual/R-devel/library/base/html/colnames.html
+colnames(x, do.NULL = TRUE, prefix = "col")
+#error: object x not found
+#trying to figure out what my matrix is named
+colnames(gse56596, do.NULL = TRUE, prefix = "col")
+# just getting "NULL" in the console, doesn't seem to be working
+
+#now following this site about how to use geoquery: https://www.bioconductor.org/help/course-materials/2011/BioC2011/LabStuff/publicDataTutorial.pdf
+Meta(gse56596)data_row_count
+Columns(gse56596)
+Meta(gse56596)$channel_count
+#keep getting errors
+#oops, using the wrong geo entity class, these commands are for GSM files and I have a GSE file, which according to this tutordial is the most confusing to use. Great.It doesn't have a data table, instead it has 2 lists, the GPLList and the GSMList.
+head(Meta(gse56596))
+#error, trying insturciotns from section2.2.1
+gse56596 <- getGEO('GSE56596', GSEMatrix = TRUE)
+show(gse56596)
+#Holy shit, something happened. YES, YES, YES!!!
+
+show(pData(phenoData(gse56596[[1]]))[1:2,c(1:30)])
+#I can see the different samples now! wow :) 
+#I think these might be instructions for gene expression data. whoops. 
+
+#starting over using this site :http://kasperdanielhansen.github.io/genbioconductor/html/minfi.html
+#these instructions are for getting the raw data
+getGEOSuppFiles("GSE56596")
+untar("GSE56596/GSE56596_RAW.tar", exdir = "GSE56596/idat")
+head(list.files("GSE56596/idat", pattern = "idat"))
+
+#decompressing files
+idatFiles <- list.files("GSE56596/idat", pattern = "idat.gz$", full = TRUE)
+sapply(idatFiles, gunzip, overwrite = TRUE)
+
+#read the IDAT files
+rgSet <- read.450k.exp("GSE56596/idat")
+#got Error saying read.450k.exp is defunct and to use read.metharray.exp insead
+#Defunct is when a function is removed from R
+help("Defunct")
+rgSet <- read.metharray.exp("GSE56596/idat")
+rgSet
+
+pData(rgSet)
+#this showed the 45 different sample IDs, which are the same as on the geo page 
+
+head(sampleNames(rgSet))
+#not sure what this is doing... I cana still see the individual sample IDs, but they are arranged differently
+
+#now I have the data, but there is no meta data and the filenames are not usefull
+
+#get the pheonotype data
+geoMat <- getGEO("GSE56596")
+pD.all <- pData(geoMat[[1]])
+pD <- pD.all[, c("title", "geo_accession", "characteristics_ch1.1", "characteristics_ch1.2")]
+head(pD)
+#this shows the tumor type for each of the first 6 patients
+
+#now this will start getting trickier because my set is different from the example
+
+#rename the columns
+names(pD)[c(3,4)] <- c("tissue", "subtype")
+pD$tissue <- sub("^tissue: ", "", pD$tissue)
+pD$subtype <- sub("^subtype", "", pD$subtype)
+
+#merge the phenotype data into the methylation data by using a common sample identifier
+sampleNames(rgSet) <- sub(".*_5", "5", sampleNames(rgSet))
+rownames(pD) <- pD$title
+pD <- pD[sampleNames(rgSet),]
+pData(rgSet) <- pD
+rgSet
+
+#preprocessing to determine Beta value (I think...)
+grSet <- preprocessQuantile(rgSet)
+#the output said it mapped to genome, fixed outliers, and did quantile normalizing. wow, all that from one little line? 
+grSet
+granges(grSet)
+getBeta(grSet)[1:3,1:3]
+
+#hmmm, this seemed helpful, but now it has ended before it had me make a density plot. Moving forward to try to make the density plot using this website: https://rdrr.io/bioc/minfi/man/densityPlot.html
+
+densityPlot(getBeta(grSet), sampGroups = NULL, main = "", xlab = "Beta", add = TRUE, legend = TRUE)
+#ok, we're really close here... using both the above website and this one: https://www.bioconductor.org/help/workflows/methylationArrayAnalysis/#obtaining-the-data
+
+
+```
+
+#Executive Summary
+
+#Sample filtering
+**Purpose: Identify and remove poor quality samples.**
+
+##Workflow
+* Calculate detection p-values by comparing totl signal for each probe to background signal (estimated from negative control probes).
+* Exclude samples with a mean p-value of >0.05%.
+
+## Figures
+* Bar chart of mean detection p-value for each sample.
+* Density plot of raw beta values.
+
+#Probe Filtering
+**Purpose: Filter out poor performing probes.**
+
+##Workflow
+* Remove probes that have failed in one or more samples based on detection p-value.
+* Remove probes from the X and Y chromosomes.
+* Remove probes that have common SNPs at the CpG site.  
+*all probes at SNPs can be removed, or a threshold can be set based on minor allele frequency*
+* Remove probes that are cross-reactive.
+
+##Figures
+* Stacked bar chart showing number of probes that are removed in each step using ggplot
+
+#Normalization
+**Purpose: Minimize unwanted variation within and between samples by removing background and correcting for dye intensity and probe type differences.**
+
+##Workflow
+* Apply the preprocessQuantile method (used for samples which are relatively similar) to the data.  
+*this step takes into account the different probe types and converts intensity to M-values and beta values*
+
+##Figures
+* Density plots of distribution of beta values for each sample before and after normalization.
+
+#Initial Data Exploration
+**Purpose: Initial exploration of the data and identification of potential batch effects.**
+
+##Workflow
+* Identify samples that cluster together using prinicpal components analysis.
+* Determine which principal components identify differences (between individuals, between tissue types, batch, etc).
+
+##Figures
+* MDS (multi-dimensional scaling) plots.  
+*data points can be colored based on known factors of interest to highlight the greatest sources of variation in the data*
+
+#Batch Effects Correction
+**Purpose: Remove batch effects from data.**
+
+##Workflow
+* Remove batch effects from data.
+
+##Figures
+* MDS plots
+
+#Cell Composition Correction
+**Purpose: Remove samples with mixed cell populations, or correct data to adjust for for cell composition.**
+
+##Workflow
+* Examine density plots to identify samples with mixed populations.  
+*peaks will be shifted*
+* Estamate the level of confounding between phenotype and cell type composition.
+* Correct data if possible, or remove samples.
+
+##Figures
+* Cell type proportion boxplots
+
+#Corrected Data Exploration
+**Purpose: Reexamination of the data after corrections to examine biological relationships between samples.**
+
+##Workflow
+* Re-examine the MDS plots and principle components to see if the relationship between samples has changed after corrections for batch effect and cell composition.
+
+##Figures
+* MDS plots.
+
+#Probe-wise differential mehtylation
+**Purpose: Discover differntially methylated probes between the different tissue types.**
+
+##Workflow
+* Designate individual and tissue type for paired analysis using *limma*.
+* Perform pairwise analysis using M-values to obtain t-statistics and p-values for each site.
+* Adjust p-values for multiple testing.
+* Assign a cut-off on the false discovery rate (typically 5%).
+* Generate tables of differently expressed CpGs.
+* Order table by p-value instead of by B-statistic (will often be the same order).
+* Use sample-wise methylation level plots to ensure the results make sense.
+
+##Figures
+* Plot sample-wise wethylation level for the top differentially methylated CpG sites using the beta-values.
+
+  *figures look like bar charts, but with individual beta values ploted instead of the mean beta values for each tissue type*
+ 
+#Differential methylation analysis of regions
+**Purpose: Discover differentially methylated regions between the different tissue types.**
+ 
+##Workflow 
+* Annotate the matrix of M-values with relevant information regarding genomic position, gene annotation, etc. using the ilmn12.hg19 annotation.
+* Use the limma pipeline for differential methylation analysis to calculate moderated t-statistics for individual CpGs.
+* Combine the indivitual CpGs to identify differentially methylated regions using dmrcate to generate a table of the DMRs with their genomic annotations and p-values.
+* Visualize the results to ensure that they make sense.
+ 
+##Figures
+* Plot of DMRs in their genomic context, including the location of the DMR on the genome, the position of nearby genes, the positions of the CpG probes, and heatmaps of the methylation levels of the individual samples and mean levels for the tissue groups.
